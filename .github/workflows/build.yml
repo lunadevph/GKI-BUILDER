@@ -12,6 +12,7 @@ on:
       android_version:
         required: true
         type: string
+        default: ""
       kernel_version:
         required: true
         type: string
@@ -62,7 +63,7 @@ on:
       brand_name:
         required: false
         type: string
-        default: Wild
+        default: luna
       bypass:
         required: false
         type: boolean
