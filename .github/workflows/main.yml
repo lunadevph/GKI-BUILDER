@@ -45,12 +45,12 @@ on:
           - 6.1.x-android14
           - 6.6.x-android15
           - 6.12.x-android16
-        default: All
+        default: 5.15.x-android13
       os_patch_level:
         description: "Patch date (YYYY-MM), kernel sublevel, lts, or All (no filter)"
         required: true
         type: string
-        default: All
+        default: lts
       page_size:
         description: "ARM64 page size. 16k requires explicitly selecting Kernel Version 6.1.x-android14, 6.6.x-android15 or 6.12.x-android16 (All is rejected)"
         type: choice
@@ -61,7 +61,7 @@ on:
       brand_name:
         description: "Kernel Branding (empty = stock version string)"
         type: string
-        default: Wild
+        default: luna
       keep_kmi:
         description: "Keep stock KMI generation suffix in kernel version (fix #265)"
         type: boolean
@@ -86,7 +86,7 @@ on:
           - KowSU
           - No Root
           - All (KernelSU-Next + KernelSU + ReSukiSU)
-        default: All (KernelSU-Next + KernelSU + ReSukiSU)
+        default: KernelSU-Next
       use_susfs:
         description: "SUSFS"
         type: boolean
@@ -1653,7 +1653,7 @@ jobs:
           if env("USE_PERF","false")=="true": feats.append("Performance Tuning")
           if env("PAGE_SIZE","4k")=="16k": feats.append("16 KB page size (ARM64)")
           lines=[]
-          lines.append("# Wild Kernels for GKI2 Devices")
+          lines.append("# Luna Kernels for GKI2 Devices")
           lines.append("")
           lines.append("## Root")
           lines.append("")

@@ -64,6 +64,36 @@ runs:
           [ "$(git -C "${{ github.workspace }}/AnyKernel3" rev-parse HEAD)" = "${{ inputs.anykernel3_commit }}" ] || { echo "AnyKernel3 pin mismatch" >&2; exit 1; }
         fi
 
+    - name: Apply Luna branding to AnyKernel3 config
+      shell: bash
+      run: |
+        set -euo pipefail
+        AK3_SH="${{ github.workspace }}/AnyKernel3/anykernel.sh"
+        if [ ! -f "$AK3_SH" ]; then
+          echo "anykernel.sh not found at $AK3_SH" >&2
+          exit 1
+        fi
+
+        # Upstream anykernel.sh ships its own kernel.string plus a promo block.
+        sed -i \
+          -e 's|^kernel\.string=.*$|kernel.string=Luna Kernels|' \
+          -e 's|Wild Kernels Supported|Luna Kernels Supported|' \
+          -e '/^ui_print "WildKernels Telegram Channel:"$/,/Thank you for using Wild Kernels/d' \
+          "$AK3_SH"
+
+        # Catch any upstream attribution/promo line outside the deleted range.
+        sed -i -E '/ui_print .*(Wild[Kk]ernels|wildkernels\.dev|WildKernelsTG|TheWildJames|Morgan Weedman)/Id' "$AK3_SH"
+
+        printf '\nui_print " "\nui_print "Thank you for using Luna Kernels!"\nui_print " "\n' >> "$AK3_SH"
+
+        if grep -qi wild "$AK3_SH"; then
+          echo "Wild branding still present in anykernel.sh" >&2
+          grep -ni wild "$AK3_SH" >&2
+          exit 1
+        fi
+        echo "AnyKernel3 config rebranded to Luna"
+        grep -n -i luna "$AK3_SH"
+
     - name: Install build deps for BTF generation (android12-5.10)
       shell: bash
       if: inputs.version == 'android12-5.10'

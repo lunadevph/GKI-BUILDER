@@ -62,7 +62,7 @@ on:
       brand_name:
         required: false
         type: string
-        default: Wild
+        default: luna
       keep_kmi:
         required: false
         type: boolean
@@ -532,7 +532,7 @@ jobs:
         clear_stats: true
 
     - name: Initialize Config Fragment
-      run: touch "${{ github.workspace }}/wild_gki.fragment"
+      run: touch "${{ github.workspace }}/luna_gki.fragment"
 
     - name: Apply Kernel Bypass Hack
       if: ${{ inputs.allow_version_mismatch == 'true' }}

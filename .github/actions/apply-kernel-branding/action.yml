@@ -17,9 +17,9 @@ inputs:
     description: 'Sublevel of kernel version (e.g., 1)'
     required: true
   brand_name:
-    description: 'Branding text appended to the version (e.g., Wild). Empty = stock version string.'
+    description: 'Branding text appended to the version (e.g., luna). Empty = stock version string.'
     required: false
-    default: Wild
+    default: luna
   keep_kmi:
     description: 'Keep stock KMI generation suffix (e.g., -8) and append brand after it. Off = legacy hardcoded replace.'
     required: false

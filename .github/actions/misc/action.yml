@@ -14,7 +14,7 @@ inputs:
     description: 'Sublevel of kernel version (e.g., 1)'
     required: true
   variant:
-    description: 'Build variant (Normal, Bypass, Wild, boot-time)'
+    description: 'Build variant (Normal, Bypass, Luna, boot-time)'
     required: true
 
 runs:
