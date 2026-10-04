@@ -1,0 +1,145 @@
+name: 'Enable Serial Kernel Log Output'
+description: 'Route raw kernel log output to the serial console and print a boot banner'
+
+inputs:
+  version:
+    description: 'Kernel config version (e.g., android13-5.15)'
+    required: true
+  console:
+    description: 'Serial console device (e.g., ttyMSM0,115200n8). Empty = leave CONFIG_CMDLINE console alone.'
+    required: false
+    default: 'ttyMSM0,115200n8'
+  log_buf_shift:
+    description: 'Kernel log ring buffer size (2^N bytes). Default 20 = 8 MB.'
+    required: false
+    default: '20'
+  brand_name:
+    description: 'Branding string shown in the boot banner'
+    required: false
+    default: luna
+  variant:
+    description: 'Build variant shown in the boot banner'
+    required: false
+    default: Normal
+  root_flavor:
+    description: 'Root implementation shown in the boot banner'
+    required: false
+    default: ''
+
+runs:
+  using: 'composite'
+  steps:
+    - name: Enable printk and serial console configs
+      uses: ./.github/actions/set-kernel-config
+      with:
+        config_list: |
+          CONFIG_PRINTK=y
+          CONFIG_PRINTK_TIME=y
+          CONFIG_EARLY_PRINTK=y
+          CONFIG_MAGIC_SYSRQ=y
+          CONFIG_LOG_BUF_SHIFT=${{ inputs.log_buf_shift }}
+          CONFIG_SERIAL_CORE_CONSOLE=y
+          CONFIG_SERIAL_EARLYCON=y
+          CONFIG_SERIAL_MSM=y
+          CONFIG_SERIAL_MSM_CONSOLE=y
+
+    - name: Point the kernel console at the serial port
+      shell: bash
+      working-directory: ${{ github.workspace }}/kernel/common
+      env:
+        CONSOLE: ${{ inputs.console }}
+      run: |
+        set -euo pipefail
+        DEFCONFIG="arch/arm64/configs/gki_defconfig"
+
+        if [ ! -f "$DEFCONFIG" ]; then
+          echo "ERROR: $DEFCONFIG not found" >&2
+          exit 1
+        fi
+
+        # Nothing to do when the caller opted out.
+        if [ -z "$CONSOLE" ]; then
+          echo "console input empty - leaving CONFIG_CMDLINE untouched"
+          exit 0
+        fi
+
+        # Only characters legal in a console= spec may reach the defconfig.
+        if ! printf '%s' "$CONSOLE" | grep -qE '^[A-Za-z0-9,.=+-]+$'; then
+          echo "ERROR: unsafe console spec: '$CONSOLE'" >&2
+          exit 1
+        fi
+
+        # GKI ships console=ttynull, which throws every printk away. Swap it
+        # for the real serial port so the raw boot log actually comes out.
+        if grep -q '^CONFIG_CMDLINE=' "$DEFCONFIG"; then
+          if grep -qE '^CONFIG_CMDLINE="[^"]*console=[^ "]*' "$DEFCONFIG"; then
+            sed -i -E "s|^(CONFIG_CMDLINE=\"[^\"]*)console=[^ \"]*|\1console=${CONSOLE}|" "$DEFCONFIG"
+          else
+            sed -i "s|^\(CONFIG_CMDLINE=\".*\)\"$|\1 console=${CONSOLE}\"|" "$DEFCONFIG"
+          fi
+        else
+          echo "CONFIG_CMDLINE=\"console=${CONSOLE}\"" >> "$DEFCONFIG"
+        fi
+
+        echo "Kernel console: $(grep '^CONFIG_CMDLINE=' "$DEFCONFIG")"
+
+    - name: Add boot log banner
+      shell: bash
+      working-directory: ${{ github.workspace }}/kernel/common
+      env:
+        BRAND: ${{ inputs.brand_name }}
+        VARIANT: ${{ inputs.variant }}
+        ROOT: ${{ inputs.root_flavor }}
+      run: |
+        set -euo pipefail
+        TARGET="init/main.c"
+        MARKER="LUNA_BOOT_LOG_BANNER"
+
+        if [ ! -f "$TARGET" ]; then
+          echo "ERROR: $TARGET not found" >&2
+          exit 1
+        fi
+
+        if grep -q "$MARKER" "$TARGET"; then
+          echo "Boot log banner already applied - skipping"
+          exit 0
+        fi
+
+        # These strings land inside C string literals, so restrict them to a
+        # charset that cannot terminate a literal or inject code.
+        for v in "$BRAND" "$VARIANT" "$ROOT"; do
+          if ! printf '%s' "$v" | grep -qE '^[A-Za-z0-9._+-]*$'; then
+            echo "ERROR: unsafe banner value: '$v' (allowed: A-Za-z0-9._+-)" >&2
+            exit 1
+          fi
+        done
+
+        ROOT_SHOWN="${ROOT:-none}"
+
+        # late_initcall runs after console_init, so this reaches both the serial
+        # port and the dmesg ring buffer. printf keeps the block indented so
+        # YAML does not read the C source as part of this mapping.
+        printf '%s\n' \
+          '' \
+          '/* LUNA_BOOT_LOG_BANNER */' \
+          'static int __init luna_boot_log_banner(void)' \
+          '{' \
+          '    pr_info("");' \
+          '    pr_info("============================================================");' \
+          '    pr_info("  @BRAND@ kernel - @VARIANT@ / @ROOT@");' \
+          '    pr_info("  %s", linux_banner);' \
+          '    pr_info("  raw log: dmesg | grep -i @BRAND@  or  logcat -b kernel");' \
+          '    pr_info("============================================================");' \
+          '    pr_info("");' \
+          '    return 0;' \
+          '}' \
+          'late_initcall(luna_boot_log_banner);' >> "$TARGET"
+
+        sed -i \
+          -e "s|@BRAND@|$BRAND|g" \
+          -e "s|@VARIANT@|$VARIANT|g" \
+          -e "s|@ROOT@|$ROOT_SHOWN|g" \
+          "$TARGET"
+
+        echo "Boot log banner added to $TARGET"
+        tail -n 16 "$TARGET"

@@ -63,6 +63,11 @@ on:
         required: false
         type: string
         default: luna
+      serial_console:
+        description: "Serial console device for raw kernel log output (empty = leave stock cmdline)"
+        required: false
+        type: string
+        default: "ttyMSM0,115200n8"
       keep_kmi:
         required: false
         type: boolean
@@ -387,6 +392,16 @@ jobs:
       if: contains(inputs.feature_set, 'Perf')
       with:
         kernel_version: ${{ inputs.kernel_version }}
+
+    - name: Enable Serial Kernel Log Output
+      if: contains(inputs.feature_set, 'SerialLog')
+      uses: ./.github/actions/serial-log
+      with:
+        version: ${{ inputs.version }}
+        console: ${{ inputs.serial_console }}
+        brand_name: ${{ inputs.brand_name }}
+        variant: ${{ inputs.variant }}
+        root_flavor: ${{ inputs.root_flavor }}
 
     - name: Setup Misc Configs
       uses: ./.github/actions/misc

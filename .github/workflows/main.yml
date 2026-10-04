@@ -127,6 +127,14 @@ on:
         description: "Performance"
         type: boolean
         default: false
+      use_serial_log:
+        description: "Serial kernel log (route raw printk to serial console + boot banner)"
+        type: boolean
+        default: false
+      serial_console:
+        description: "Serial console device (empty = keep stock CONFIG_CMDLINE). Qualcomm: ttyMSM0,115200n8"
+        type: string
+        default: ttyMSM0,115200n8
       test_release_notes:
         description: "Render release notes preview only (skip all builds + release)"
         type: boolean
@@ -572,6 +580,7 @@ jobs:
           [ "${{ inputs.use_unicode }}" = "true" ] && FEATURES="${FEATURES}Unicode+"
           [ "${{ inputs.use_bpf }}" = "true" ] && FEATURES="${FEATURES}BPF+"
           [ "${{ inputs.use_perf }}" = "true" ] && FEATURES="${FEATURES}Perf+"
+          [ "${{ inputs.use_serial_log }}" = "true" ] && FEATURES="${FEATURES}SerialLog+"
           echo "feature_set=${FEATURES%+}" >> "$GITHUB_OUTPUT"
 
       - name: Clone shared source repos once
@@ -788,6 +797,7 @@ jobs:
       anykernel3_commit: ${{ needs.resolve-sources.outputs.anykernel3_commit }}
       droidspaces_commit: ${{ needs.resolve-sources.outputs.droidspaces_commit }}
       brand_name: ${{ inputs.brand_name }}
+      serial_console: ${{ inputs.serial_console }}
       keep_kmi: ${{ inputs.keep_kmi }}
       os_patch_level: ${{ inputs.os_patch_level }}
       allow_version_mismatch: ${{ inputs.allow_version_mismatch }}
@@ -818,6 +828,7 @@ jobs:
       anykernel3_commit: ${{ needs.resolve-sources.outputs.anykernel3_commit }}
       droidspaces_commit: ${{ needs.resolve-sources.outputs.droidspaces_commit }}
       brand_name: ${{ inputs.brand_name }}
+      serial_console: ${{ inputs.serial_console }}
       keep_kmi: ${{ inputs.keep_kmi }}
       os_patch_level: ${{ inputs.os_patch_level }}
       allow_version_mismatch: ${{ inputs.allow_version_mismatch }}
@@ -848,6 +859,7 @@ jobs:
       anykernel3_commit: ${{ needs.resolve-sources.outputs.anykernel3_commit }}
       droidspaces_commit: ${{ needs.resolve-sources.outputs.droidspaces_commit }}
       brand_name: ${{ inputs.brand_name }}
+      serial_console: ${{ inputs.serial_console }}
       keep_kmi: ${{ inputs.keep_kmi }}
       os_patch_level: ${{ inputs.os_patch_level }}
       allow_version_mismatch: ${{ inputs.allow_version_mismatch }}
@@ -878,6 +890,7 @@ jobs:
       anykernel3_commit: ${{ needs.resolve-sources.outputs.anykernel3_commit }}
       droidspaces_commit: ${{ needs.resolve-sources.outputs.droidspaces_commit }}
       brand_name: ${{ inputs.brand_name }}
+      serial_console: ${{ inputs.serial_console }}
       keep_kmi: ${{ inputs.keep_kmi }}
       os_patch_level: ${{ inputs.os_patch_level }}
       allow_version_mismatch: ${{ inputs.allow_version_mismatch }}
@@ -908,6 +921,7 @@ jobs:
       anykernel3_commit: ${{ needs.resolve-sources.outputs.anykernel3_commit }}
       droidspaces_commit: ${{ needs.resolve-sources.outputs.droidspaces_commit }}
       brand_name: ${{ inputs.brand_name }}
+      serial_console: ${{ inputs.serial_console }}
       keep_kmi: ${{ inputs.keep_kmi }}
       os_patch_level: ${{ inputs.os_patch_level }}
       allow_version_mismatch: ${{ inputs.allow_version_mismatch }}
@@ -938,6 +952,7 @@ jobs:
       anykernel3_commit: ${{ needs.resolve-sources.outputs.anykernel3_commit }}
       droidspaces_commit: ${{ needs.resolve-sources.outputs.droidspaces_commit }}
       brand_name: ${{ inputs.brand_name }}
+      serial_console: ${{ inputs.serial_console }}
       keep_kmi: ${{ inputs.keep_kmi }}
       os_patch_level: ${{ inputs.os_patch_level }}
       allow_version_mismatch: ${{ inputs.allow_version_mismatch }}
@@ -968,6 +983,7 @@ jobs:
       anykernel3_commit: ${{ needs.resolve-sources.outputs.anykernel3_commit }}
       droidspaces_commit: ${{ needs.resolve-sources.outputs.droidspaces_commit }}
       brand_name: ${{ inputs.brand_name }}
+      serial_console: ${{ inputs.serial_console }}
       keep_kmi: ${{ inputs.keep_kmi }}
       os_patch_level: ${{ inputs.os_patch_level }}
       allow_version_mismatch: ${{ inputs.allow_version_mismatch }}
@@ -1596,6 +1612,7 @@ jobs:
           USE_UNICODE: ${{ inputs.use_unicode }}
           USE_BPF: ${{ inputs.use_bpf }}
           USE_PERF: ${{ inputs.use_perf }}
+          USE_SERIAL_LOG: ${{ inputs.use_serial_log }}
           USE_CACHE: ${{ inputs.use_cache }}
           PAGE_SIZE: ${{ inputs.page_size }}
           KERNEL_BUILD_VERSION: ${{ inputs.kernel_build_version }}
@@ -1651,6 +1668,7 @@ jobs:
           if env("USE_UNICODE","true")=="true": feats.append("Unicode Fix")
           if env("USE_BPF","true")=="true": feats.append("BTF / eBPF / FUSE-BPF")
           if env("USE_PERF","false")=="true": feats.append("Performance Tuning")
+          if env("USE_SERIAL_LOG","false")=="true": feats.append("Serial Kernel Log Output")
           if env("PAGE_SIZE","4k")=="16k": feats.append("16 KB page size (ARM64)")
           lines=[]
           lines.append("# Luna Kernels for GKI2 Devices")
