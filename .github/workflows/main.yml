@@ -128,7 +128,7 @@ on:
         type: boolean
         default: false
       use_serial_log:
-        description: "Serial kernel log (route raw printk to serial console + boot banner)"
+        description: "Serial kernel log (route raw printk to serial console)"
         type: boolean
         default: false
       serial_console:

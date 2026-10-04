@@ -399,9 +399,6 @@ jobs:
       with:
         version: ${{ inputs.version }}
         console: ${{ inputs.serial_console }}
-        brand_name: ${{ inputs.brand_name }}
-        variant: ${{ inputs.variant }}
-        root_flavor: ${{ inputs.root_flavor }}
 
     - name: Setup Misc Configs
       uses: ./.github/actions/misc

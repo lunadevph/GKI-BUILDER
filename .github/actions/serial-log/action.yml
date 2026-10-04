@@ -1,5 +1,5 @@
 name: 'Enable Serial Kernel Log Output'
-description: 'Route raw kernel log output to the serial console and print a boot banner'
+description: 'Route raw kernel log output to the serial console'
 
 inputs:
   version:
@@ -13,18 +13,6 @@ inputs:
     description: 'Kernel log ring buffer size (2^N bytes). Default 20 = 8 MB.'
     required: false
     default: '20'
-  brand_name:
-    description: 'Branding string shown in the boot banner'
-    required: false
-    default: luna
-  variant:
-    description: 'Build variant shown in the boot banner'
-    required: false
-    default: Normal
-  root_flavor:
-    description: 'Root implementation shown in the boot banner'
-    required: false
-    default: ''
 
 runs:
   using: 'composite'
@@ -82,64 +70,3 @@ runs:
         fi
 
         echo "Kernel console: $(grep '^CONFIG_CMDLINE=' "$DEFCONFIG")"
-
-    - name: Add boot log banner
-      shell: bash
-      working-directory: ${{ github.workspace }}/kernel/common
-      env:
-        BRAND: ${{ inputs.brand_name }}
-        VARIANT: ${{ inputs.variant }}
-        ROOT: ${{ inputs.root_flavor }}
-      run: |
-        set -euo pipefail
-        TARGET="init/main.c"
-        MARKER="LUNA_BOOT_LOG_BANNER"
-
-        if [ ! -f "$TARGET" ]; then
-          echo "ERROR: $TARGET not found" >&2
-          exit 1
-        fi
-
-        if grep -q "$MARKER" "$TARGET"; then
-          echo "Boot log banner already applied - skipping"
-          exit 0
-        fi
-
-        # These strings land inside C string literals, so restrict them to a
-        # charset that cannot terminate a literal or inject code.
-        for v in "$BRAND" "$VARIANT" "$ROOT"; do
-          if ! printf '%s' "$v" | grep -qE '^[A-Za-z0-9._+-]*$'; then
-            echo "ERROR: unsafe banner value: '$v' (allowed: A-Za-z0-9._+-)" >&2
-            exit 1
-          fi
-        done
-
-        ROOT_SHOWN="${ROOT:-none}"
-
-        # late_initcall runs after console_init, so this reaches both the serial
-        # port and the dmesg ring buffer. printf keeps the block indented so
-        # YAML does not read the C source as part of this mapping.
-        printf '%s\n' \
-          '' \
-          '/* LUNA_BOOT_LOG_BANNER */' \
-          'static int __init luna_boot_log_banner(void)' \
-          '{' \
-          '    pr_info("");' \
-          '    pr_info("============================================================");' \
-          '    pr_info("  @BRAND@ kernel - @VARIANT@ / @ROOT@");' \
-          '    pr_info("  %s", linux_banner);' \
-          '    pr_info("  raw log: dmesg | grep -i @BRAND@  or  logcat -b kernel");' \
-          '    pr_info("============================================================");' \
-          '    pr_info("");' \
-          '    return 0;' \
-          '}' \
-          'late_initcall(luna_boot_log_banner);' >> "$TARGET"
-
-        sed -i \
-          -e "s|@BRAND@|$BRAND|g" \
-          -e "s|@VARIANT@|$VARIANT|g" \
-          -e "s|@ROOT@|$ROOT_SHOWN|g" \
-          "$TARGET"
-
-        echo "Boot log banner added to $TARGET"
-        tail -n 16 "$TARGET"
