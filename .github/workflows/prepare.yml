@@ -91,6 +91,11 @@ on:
         required: false
         type: string
         default: "4k"
+      telegram_notify:
+        description: "Post build lifecycle updates to Telegram"
+        required: false
+        type: boolean
+        default: false
 
 jobs:
   generate-matrix:
@@ -208,4 +213,5 @@ jobs:
       allow_version_mismatch: ${{ inputs.allow_version_mismatch }}
       use_cache: ${{ inputs.use_cache }}
       page_size: ${{ inputs.page_size }}
+      telegram_notify: ${{ inputs.telegram_notify }}
     secrets: inherit
