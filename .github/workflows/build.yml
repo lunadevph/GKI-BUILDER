@@ -214,16 +214,18 @@ jobs:
       with:
         event: start
         build_name: ${{ steps.extract.outputs.file_name }}
+        kernel_version: ${{ inputs.kernel_version }}.${{ inputs.sublevel }}-${{ inputs.android_version }}-${{ inputs.os_patch_level }}
         bot_token: ${{ secrets.TELEGRAM_BOT_TOKEN }}
         chat_id: ${{ secrets.TELEGRAM_CHAT_ID }}
 
-    - name: Notify Build In Progress
+    - name: Notify Stage - Apply Patches
       if: inputs.telegram_notify
       uses: ./.github/actions/telegram-notify
       with:
-        event: status
+        event: stage
+        stage_index: '2'
         build_name: ${{ steps.extract.outputs.file_name }}
-        status: 'Patches applied. Compiling kernel now.'
+        kernel_version: ${{ inputs.kernel_version }}.${{ inputs.sublevel }}-${{ inputs.android_version }}-${{ inputs.os_patch_level }}
         bot_token: ${{ secrets.TELEGRAM_BOT_TOKEN }}
         chat_id: ${{ secrets.TELEGRAM_CHAT_ID }}
 
@@ -499,6 +501,17 @@ jobs:
         if-no-files-found: ignore
         compression-level: 9
 
+    - name: Notify Stage - Prepare Toolchain
+      if: inputs.telegram_notify
+      uses: ./.github/actions/telegram-notify
+      with:
+        event: stage
+        stage_index: '3'
+        build_name: ${{ steps.extract.outputs.file_name }}
+        kernel_version: ${{ inputs.kernel_version }}.${{ inputs.sublevel }}-${{ inputs.android_version }}-${{ inputs.os_patch_level }}
+        bot_token: ${{ secrets.TELEGRAM_BOT_TOKEN }}
+        chat_id: ${{ secrets.TELEGRAM_CHAT_ID }}
+
     - name: 'Setup Cache and Build Environment'
       if: inputs.use_cache
       uses: ./.github/actions/cache-setup
@@ -577,7 +590,35 @@ jobs:
         version: ${{ inputs.version }}
         allow_version_mismatch: true
 
+    - name: Notify Stage - Configure Kernel
+      if: inputs.telegram_notify
+      uses: ./.github/actions/telegram-notify
+      with:
+        event: stage
+        stage_index: '4'
+        build_name: ${{ steps.extract.outputs.file_name }}
+        kernel_version: ${{ inputs.kernel_version }}.${{ inputs.sublevel }}-${{ inputs.android_version }}-${{ inputs.os_patch_level }}
+        bot_token: ${{ secrets.TELEGRAM_BOT_TOKEN }}
+        chat_id: ${{ secrets.TELEGRAM_CHAT_ID }}
+
+    - name: Notify Stage - Compile Kernel
+      if: inputs.telegram_notify
+      uses: ./.github/actions/telegram-notify
+      with:
+        event: stage
+        stage_index: '5'
+        build_name: ${{ steps.extract.outputs.file_name }}
+        kernel_version: ${{ inputs.kernel_version }}.${{ inputs.sublevel }}-${{ inputs.android_version }}-${{ inputs.os_patch_level }}
+        force: '1'
+        bot_token: ${{ secrets.TELEGRAM_BOT_TOKEN }}
+        chat_id: ${{ secrets.TELEGRAM_CHAT_ID }}
+
     - name: Build Normal Kernel
+      id: compile
+      # continue-on-error lets the failure reporter run and name the exact stage
+      # with the real exit code. A guard step below still fails the job, so the
+      # build never reports success on a failed compile.
+      continue-on-error: true
       env:
         SOURCE_DATE_EPOCH: ${{ env.SOURCE_DATE_EPOCH }}
         KBUILD_BUILD_TIMESTAMP: ${{ env.KBUILD_BUILD_TIMESTAMP }}
@@ -587,6 +628,54 @@ jobs:
       with:
         version: ${{ inputs.version }}
         page_size: ${{ inputs.page_size }}
+
+    - name: Capture compile failure details
+      id: compile_failure
+      if: failure() && steps.compile.outcome == 'failure'
+      shell: bash
+      run: |
+        set -uo pipefail
+        {
+          echo "outcome=Compile Kernel failed"
+          echo "exit_code=1"
+        } >> "$GITHUB_OUTPUT"
+        # Keep a bounded local diagnostic tail for the report.
+        mkdir -p "${{ runner.temp }}/luna-diag"
+        if [ -f "${{ github.workspace }}/luna_build.log" ]; then
+          tail -n 60 "${{ github.workspace }}/luna_build.log" \
+            > "${{ runner.temp }}/luna-diag/compile-tail.log" || true
+        fi
+
+    - name: Notify Compile Failed
+      if: failure() && steps.compile.outcome == 'failure' && inputs.telegram_notify
+      uses: ./.github/actions/telegram-notify
+      with:
+        event: failure
+        stage_index: '5'
+        failed_stage: 'Compile Kernel'
+        error_summary: 'Kernel compile failed. See the run log for the failing target.'
+        build_name: ${{ steps.extract.outputs.file_name }}
+        kernel_version: ${{ inputs.kernel_version }}.${{ inputs.sublevel }}-${{ inputs.android_version }}-${{ inputs.os_patch_level }}
+        bot_token: ${{ secrets.TELEGRAM_BOT_TOKEN }}
+        chat_id: ${{ secrets.TELEGRAM_CHAT_ID }}
+
+    - name: Enforce compile failure
+      if: failure() && steps.compile.outcome == 'failure'
+      shell: bash
+      run: |
+        echo "::error::Kernel compile failed - failing the job."
+        exit 1
+
+    - name: Notify Stage - Verify Artifacts
+      if: success() && inputs.telegram_notify
+      uses: ./.github/actions/telegram-notify
+      with:
+        event: stage
+        stage_index: '6'
+        build_name: ${{ steps.extract.outputs.file_name }}
+        kernel_version: ${{ inputs.kernel_version }}.${{ inputs.sublevel }}-${{ inputs.android_version }}-${{ inputs.os_patch_level }}
+        bot_token: ${{ secrets.TELEGRAM_BOT_TOKEN }}
+        chat_id: ${{ secrets.TELEGRAM_CHAT_ID }}
 
     - name: Get Cache Stats
       uses: ./.github/actions/cache-stats
@@ -736,22 +825,60 @@ jobs:
         if-no-files-found: ignore
         compression-level: 9
 
+    - name: Collect verified artifact facts
+      id: artifacts
+      if: success()
+      shell: bash
+      run: |
+        set -uo pipefail
+        INFO_FILE="${{ runner.temp }}/luna-artifacts.txt"
+        mkdir -p "${{ runner.temp }}"
+        : > "$INFO_FILE"
+        if bash "${{ github.workspace }}/.github/scripts/luna_artifact_info.sh" \
+             "${{ github.workspace }}/AnyKernel3" 10 > "$INFO_FILE" 2>/dev/null; then
+          echo "collected=$(wc -l < "$INFO_FILE" | tr -d ' ')" >> "$GITHUB_OUTPUT"
+          cat "$INFO_FILE"
+        else
+          # No verified artifact: report none rather than inventing one.
+          echo "collected=0" >> "$GITHUB_OUTPUT"
+          echo "::warning::No verified artifacts found under AnyKernel3."
+        fi
+        {
+          echo "path=$INFO_FILE"
+        } >> "$GITHUB_OUTPUT"
+
+    - name: Notify Stage - Publish Artifacts
+      if: success() && inputs.telegram_notify
+      uses: ./.github/actions/telegram-notify
+      with:
+        event: stage
+        stage_index: '7'
+        build_name: ${{ steps.extract.outputs.file_name }}
+        kernel_version: ${{ inputs.kernel_version }}.${{ inputs.sublevel }}-${{ inputs.android_version }}-${{ inputs.os_patch_level }}
+        bot_token: ${{ secrets.TELEGRAM_BOT_TOKEN }}
+        chat_id: ${{ secrets.TELEGRAM_CHAT_ID }}
+
     - name: Notify Build Success
       if: success() && inputs.telegram_notify
       uses: ./.github/actions/telegram-notify
       with:
         event: success
         build_name: ${{ steps.extract.outputs.file_name }}
-        artifact_name: ${{ steps.extract.outputs.file_name }}-AnyKernel3
+        kernel_version: ${{ inputs.kernel_version }}.${{ inputs.sublevel }}-${{ inputs.android_version }}-${{ inputs.os_patch_level }}
+        artifact_info_file: ${{ steps.artifacts.outputs.path }}
         bot_token: ${{ secrets.TELEGRAM_BOT_TOKEN }}
         chat_id: ${{ secrets.TELEGRAM_CHAT_ID }}
 
     - name: Notify Build Failed
-      if: failure() && inputs.telegram_notify
+      if: failure() && inputs.telegram_notify && steps.compile.outcome != 'failure'
       uses: ./.github/actions/telegram-notify
       with:
         event: failure
+        stage_index: '6'
+        failed_stage: 'Post-compile verification'
+        error_summary: 'A post-compile step failed. See the run log.'
         build_name: ${{ steps.extract.outputs.file_name }}
+        kernel_version: ${{ inputs.kernel_version }}.${{ inputs.sublevel }}-${{ inputs.android_version }}-${{ inputs.os_patch_level }}
         bot_token: ${{ secrets.TELEGRAM_BOT_TOKEN }}
         chat_id: ${{ secrets.TELEGRAM_CHAT_ID }}
 

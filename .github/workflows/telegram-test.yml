@@ -1,17 +1,14 @@
-name: Telegram Test
+name: Luna Build Agent Test
 description: >
-  Verify the Telegram bot and chat ids without running a kernel build.
-  Sends one 'start' and one 'success' test message to every configured chat.
+  Validate the Luna Build Agent without triggering a kernel build.
+  Runs the offline unit suite, then drives the agent through a full simulated
+  pipeline (start, every stage, success) and a simulated compile failure.
 
 on:
   workflow_dispatch:
     inputs:
-      send_success_sample:
-        description: "Send a sample 'success' message with a fake artifact link"
-        type: boolean
-        default: true
-      send_failure_sample:
-        description: "Send a sample 'failure' message (styling preview only)"
+      send_failure_simulation:
+        description: 'Also simulate a failed compile (sends a FAILED message)'
         type: boolean
         default: true
 
@@ -19,117 +16,155 @@ permissions:
   contents: read
 
 jobs:
-  telegram-test:
+  agent-test:
     runs-on: ubuntu-latest
-    timeout-minutes: 5
+    timeout-minutes: 10
     steps:
     - name: Checkout Repository
       uses: actions/checkout@v7
 
-    - name: Report configured secrets
+    - name: Verify configuration is present
       shell: bash
       env:
         TG_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
         TG_CHAT_ID: ${{ secrets.TELEGRAM_CHAT_ID }}
       run: |
         set -euo pipefail
-        if [ -z "${TG_TOKEN:-}" ]; then
-          echo "::error::TELEGRAM_BOT_TOKEN secret is not set."
-          exit 1
-        fi
-        if [ -z "${TG_CHAT_ID:-}" ]; then
-          echo "::error::TELEGRAM_CHAT_ID secret is not set."
-          exit 1
-        fi
-        echo "TELEGRAM_BOT_TOKEN: set (${#TG_TOKEN} chars)"
-        # Never echo the secret itself.
-        echo "TELEGRAM_CHAT_ID: ${TG_CHAT_ID}"
+        [ -n "$TG_TOKEN" ] || { echo "::error::TELEGRAM_BOT_TOKEN not set"; exit 1; }
+        [ -n "$TG_CHAT_ID" ] || { echo "::error::TELEGRAM_CHAT_ID not set"; exit 1; }
+        echo "Token present (${#TG_TOKEN} chars), chat id(s): $(printf '%s' "$TG_CHAT_ID" | tr ',' '\n' | wc -l)"
 
-    - name: Verify bot identity via getMe
+    - name: Verify bot token is valid
       shell: bash
       env:
         TG_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
       run: |
-        set -euo pipefail
-        echo "Checking the bot token is valid..."
-        if ! resp="$(curl --silent --show-error --fail-with-body \
-              --max-time 30 \
-              "https://api.telegram.org/bot${TG_TOKEN}/getMe")"; then
-          echo "::error::getMe failed - the bot token looks invalid."
-          exit 1
-        fi
-        # Pull username out of the JSON without needing jq.
-        echo "getMe response: ${resp}"
+        set -uo pipefail
+        resp="$(curl --silent --show-error --fail-with-body --max-time 30 \
+          "https://api.telegram.org/bot${TG_TOKEN}/getMe")" || {
+          echo "::error::getMe failed - token rejected"; exit 1; }
+        echo "$resp" | head -c 200
         case "$resp" in
-          *'"ok":true'*) echo "Bot token is valid." ;;
-          *) echo "::error::getMe did not return ok:true"; exit 1 ;;
+          *'"ok":true'*) echo; echo "Token valid." ;;
+          *) echo "::error::unexpected getMe reply"; exit 1 ;;
         esac
 
-    - name: Send start test message
-      id: send-start
+    - name: Run offline unit suite (no network)
+      shell: bash
+      run: bash .github/actions/telegram-notify/test_lib.sh
+
+    - name: Verify stage wiring matches the canonical pipeline
+      shell: bash
+      run: |
+        set -uo pipefail
+        # Stages declared in lib.sh
+        .github/actions/telegram-notify/lib.sh
+        echo "canonical stages: ${#LUNA_STAGES[@]}"
+        for s in "${LUNA_STAGES[@]}"; do echo "  - $s"; done
+        echo
+        # Stages the workflow actually notifies about.
+        echo "stage events wired in build.yml:"
+        grep -oE "stage_index: '[0-9]+'" .github/workflows/build.yml | sort -u
+        n="$(grep -cE "stage_index: '[0-9]+'" .github/workflows/build.yml)"
+        echo "count=$n"
+        if [ "$n" -lt 5 ]; then
+          echo "::error::expected stage markers for the pipeline, found only $n"
+          exit 1
+        fi
+
+    # ---------------- successful pipeline simulation ----------------
+    - name: 'Sim: start'
       uses: ./.github/actions/telegram-notify
       with:
         event: start
-        build_name: "Telegram API test (no build)"
+        build_name: '5.15.220-android13 (gki)'
+        kernel_version: '5.15.220-android13-lts-KernelSU-Next'
         bot_token: ${{ secrets.TELEGRAM_BOT_TOKEN }}
         chat_id: ${{ secrets.TELEGRAM_CHAT_ID }}
 
-    - name: Send status test message
-      id: send-status
+    - name: 'Sim: stage 2 Apply Patches'
       uses: ./.github/actions/telegram-notify
       with:
-        event: status
-        build_name: "Telegram API test (no build)"
-        status: "Patches applied. Compiling kernel now."
+        event: stage
+        stage_index: '2'
+        build_name: '5.15.220-android13 (gki)'
+        kernel_version: '5.15.220-android13-lts-KernelSU-Next'
+        force: '1'
         bot_token: ${{ secrets.TELEGRAM_BOT_TOKEN }}
         chat_id: ${{ secrets.TELEGRAM_CHAT_ID }}
 
-    - name: Send success test message
-      id: send-success
-      if: inputs.send_success_sample
+    - name: 'Sim: stage 5 Compile Kernel'
+      uses: ./.github/actions/telegram-notify
+      with:
+        event: stage
+        stage_index: '5'
+        build_name: '5.15.220-android13 (gki)'
+        kernel_version: '5.15.220-android13-lts-KernelSU-Next'
+        force: '1'
+        bot_token: ${{ secrets.TELEGRAM_BOT_TOKEN }}
+        chat_id: ${{ secrets.TELEGRAM_CHAT_ID }}
+
+    - name: 'Sim: build sample artifact info from real files'
+      id: simart
+      shell: bash
+      run: |
+        set -uo pipefail
+        D="${{ runner.temp }}/AnyKernel3"
+        mkdir -p "$D"
+        head -c 1048576 /dev/urandom > "$D/Image"
+        printf 'echo placeholder\n' > "$D/anykernel.sh"
+        head -c 2048 /dev/urandom > "$D/dtb"
+        F="${{ runner.temp }}/sim-artifacts.txt"
+        bash .github/scripts/luna_artifact_info.sh "$D" 10 > "$F"
+        echo "path=$F" >> "$GITHUB_OUTPUT"
+        cat "$F"
+
+    - name: 'Sim: success'
       uses: ./.github/actions/telegram-notify
       with:
         event: success
-        build_name: "Telegram API test (no build)"
-        artifact_name: "sample-AnyKernel3"
+        build_name: '5.15.220-android13 (gki)'
+        kernel_version: '5.15.220-android13-lts-KernelSU-Next'
+        artifact_info_file: ${{ steps.simart.outputs.path }}
         bot_token: ${{ secrets.TELEGRAM_BOT_TOKEN }}
         chat_id: ${{ secrets.TELEGRAM_CHAT_ID }}
 
-    - name: Send failure test message
-      id: send-failure
-      if: inputs.send_failure_sample
+    # ---------------- failure simulation (separate run id) ----------------
+    - name: 'Sim: failure run start'
+      if: inputs.send_failure_simulation
+      uses: ./.github/actions/telegram-notify
+      with:
+        event: start
+        build_name: '5.15.220-android13 (gki) [SIM FAIL]'
+        kernel_version: '5.15.220-android13-lts-KernelSU-Next'
+        bot_token: ${{ secrets.TELEGRAM_BOT_TOKEN }}
+        chat_id: ${{ secrets.TELEGRAM_CHAT_ID }}
+
+    - name: 'Sim: failure at compile'
+      if: inputs.send_failure_simulation
       uses: ./.github/actions/telegram-notify
       with:
         event: failure
-        build_name: "Telegram API test (no build)"
+        stage_index: '5'
+        failed_stage: 'Compile Kernel'
+        error_summary: 'LD: undefined reference to `foo_symbol` (simulated)'
+        build_name: '5.15.220-android13 (gki) [SIM FAIL]'
+        kernel_version: '5.15.220-android13-lts-KernelSU-Next'
         bot_token: ${{ secrets.TELEGRAM_BOT_TOKEN }}
         chat_id: ${{ secrets.TELEGRAM_CHAT_ID }}
 
     - name: Summary
       if: always()
       shell: bash
-      env:
-        START_OUTCOME: ${{ steps.send-start.outcome }}
-        STATUS_OUTCOME: ${{ steps.send-status.outcome }}
-        SUCCESS_OUTCOME: ${{ steps.send-success.outcome }}
-        FAILURE_OUTCOME: ${{ steps.send-failure.outcome }}
       run: |
         {
-          echo "### Telegram API test"
+          echo "### Luna Build Agent test"
           echo
-          echo "- getMe: \`bot token valid\`"
-          echo "- start:   \`${START_OUTCOME}\`"
-          echo "- status:  \`${STATUS_OUTCOME}\`"
-          echo "- success: \`${SUCCESS_OUTCOME}\`"
-          echo "- failure: \`${FAILURE_OUTCOME}\`"
+          echo "Check the Telegram channel for:"
+          echo "- a RUNNING message that was edited in place through the pipeline"
+          echo "- a SUCCESS message with real artifact sizes + sha256 prefixes"
+          echo "- optionally a FAILED message naming \`Compile Kernel\`"
           echo
-          if [ "${START_OUTCOME}" = "success" ]; then
-            echo "You should see four messages in the channel with emoji + inline buttons."
-            echo "The \`failure\` one is a styling sample only - no build actually failed."
-          else
-            echo "**Delivery failed.** Common causes:"
-            echo "- bot is not an admin in the channel"
-            echo "- chat id is wrong (channels look like \`-100...\`)"
-            echo "- bot cannot post until started once in a DM"
-          fi
+          echo "If nothing arrived, the usual causes are: the bot is not an admin"
+          echo "in the channel, or the chat id is wrong (channels look like \`-100...\`)."
         } >> "$GITHUB_STEP_SUMMARY"
