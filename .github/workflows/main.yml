@@ -62,6 +62,10 @@ on:
         description: "Kernel Branding (empty = stock version string)"
         type: string
         default: luna
+      telegram_notify:
+        description: "Post build lifecycle updates to Telegram"
+        type: boolean
+        default: false
       keep_kmi:
         description: "Keep stock KMI generation suffix in kernel version (fix #265)"
         type: boolean
@@ -803,6 +807,7 @@ jobs:
       allow_version_mismatch: ${{ inputs.allow_version_mismatch }}
       use_cache: ${{ inputs.use_cache }}
       page_size: ${{ inputs.page_size }}
+      telegram_notify: ${{ inputs.telegram_notify }}
     secrets: inherit
 
   build-android13-5-10:
@@ -834,6 +839,7 @@ jobs:
       allow_version_mismatch: ${{ inputs.allow_version_mismatch }}
       use_cache: ${{ inputs.use_cache }}
       page_size: ${{ inputs.page_size }}
+      telegram_notify: ${{ inputs.telegram_notify }}
     secrets: inherit
 
   build-android13-5-15:
@@ -865,6 +871,7 @@ jobs:
       allow_version_mismatch: ${{ inputs.allow_version_mismatch }}
       use_cache: ${{ inputs.use_cache }}
       page_size: ${{ inputs.page_size }}
+      telegram_notify: ${{ inputs.telegram_notify }}
     secrets: inherit
 
   build-android14-5-15:
@@ -896,6 +903,7 @@ jobs:
       allow_version_mismatch: ${{ inputs.allow_version_mismatch }}
       use_cache: ${{ inputs.use_cache }}
       page_size: ${{ inputs.page_size }}
+      telegram_notify: ${{ inputs.telegram_notify }}
     secrets: inherit
 
   build-android14-6-1:
@@ -927,6 +935,7 @@ jobs:
       allow_version_mismatch: ${{ inputs.allow_version_mismatch }}
       use_cache: ${{ inputs.use_cache }}
       page_size: ${{ inputs.page_size }}
+      telegram_notify: ${{ inputs.telegram_notify }}
     secrets: inherit
 
   build-android15-6-6:
@@ -958,6 +967,7 @@ jobs:
       allow_version_mismatch: ${{ inputs.allow_version_mismatch }}
       use_cache: ${{ inputs.use_cache }}
       page_size: ${{ inputs.page_size }}
+      telegram_notify: ${{ inputs.telegram_notify }}
     secrets: inherit
 
   build-android16-6-12:
@@ -989,6 +999,7 @@ jobs:
       allow_version_mismatch: ${{ inputs.allow_version_mismatch }}
       use_cache: ${{ inputs.use_cache }}
       page_size: ${{ inputs.page_size }}
+      telegram_notify: ${{ inputs.telegram_notify }}
     secrets: inherit
 
   update-verified-pins:

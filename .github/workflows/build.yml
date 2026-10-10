@@ -86,6 +86,11 @@ on:
         required: false
         type: string
         default: "4k"
+      telegram_notify:
+        description: "Post build lifecycle updates to Telegram (requires TELEGRAM_BOT_TOKEN / TELEGRAM_CHAT_ID secrets)"
+        required: false
+        type: boolean
+        default: false
 
 jobs:
   build-gki:
@@ -202,6 +207,21 @@ jobs:
         os_patch_level: ${{ inputs.os_patch_level }}
         variant: ${{ inputs.variant }}
         page_size: ${{ inputs.page_size }}
+
+    - name: Notify Build Started
+      if: inputs.telegram_notify
+      uses: ./.github/actions/telegram-notify
+      with:
+        event: start
+        build_name: ${{ steps.extract.outputs.file_name }}
+
+    - name: Notify Build In Progress
+      if: inputs.telegram_notify
+      uses: ./.github/actions/telegram-notify
+      with:
+        event: status
+        build_name: ${{ steps.extract.outputs.file_name }}
+        status: 'Patches applied. Compiling kernel now.'
 
     - name: Kernel Fixes
       uses: ./.github/actions/kernel-fixes
@@ -711,6 +731,21 @@ jobs:
         path: ${{ github.workspace }}/AnyKernel3/**
         if-no-files-found: ignore
         compression-level: 9
+
+    - name: Notify Build Success
+      if: success() && inputs.telegram_notify
+      uses: ./.github/actions/telegram-notify
+      with:
+        event: success
+        build_name: ${{ steps.extract.outputs.file_name }}
+        artifact_name: ${{ steps.extract.outputs.file_name }}-AnyKernel3
+
+    - name: Notify Build Failed
+      if: failure() && inputs.telegram_notify
+      uses: ./.github/actions/telegram-notify
+      with:
+        event: failure
+        build_name: ${{ steps.extract.outputs.file_name }}
 
     - name: Write Build-verified only artifact metadata
       if: success() && inputs.root_flavor != '' && inputs.root_flavor != 'none'

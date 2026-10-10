@@ -1,0 +1,155 @@
+name: 'Telegram Build Notification'
+description: 'Broadcast Luna kernel build lifecycle events to a Telegram chat'
+
+inputs:
+  event:
+    description: 'Lifecycle event: start, status, success, or failure'
+    required: true
+  bot_token:
+    description: 'Telegram bot token. Leave empty to read the TELEGRAM_BOT_TOKEN secret.'
+    required: false
+    default: ''
+  chat_id:
+    description: 'Telegram chat id(s). Comma-separated to broadcast to every channel the bot is in. Leave empty to read TELEGRAM_CHAT_ID.'
+    required: false
+    default: ''
+  build_name:
+    description: 'Human readable build name'
+    required: false
+    default: ''
+  status:
+    description: 'Status line for event=status'
+    required: false
+    default: ''
+  artifact_name:
+    description: 'Uploaded artifact name, used to build the download link'
+    required: false
+    default: ''
+  run_id:
+    description: 'GitHub Actions run id'
+    required: false
+    default: ${{ github.run_id }}
+  server_url:
+    description: 'GitHub server URL'
+    required: false
+    default: ${{ github.server_url }}
+  repository:
+    description: 'GitHub repository slug'
+    required: false
+    default: ${{ github.repository }}
+
+runs:
+  using: 'composite'
+  steps:
+    - name: Send Telegram notification
+      shell: bash
+      env:
+        TG_TOKEN: ${{ inputs.bot_token || secrets.TELEGRAM_BOT_TOKEN }}
+        TG_CHAT_ID: ${{ inputs.chat_id || secrets.TELEGRAM_CHAT_ID }}
+        TG_EVENT: ${{ inputs.event }}
+        TG_BUILD_NAME: ${{ inputs.build_name }}
+        TG_STATUS: ${{ inputs.status }}
+        TG_ARTIFACT: ${{ inputs.artifact_name }}
+        TG_RUN_ID: ${{ inputs.run_id }}
+        TG_SERVER_URL: ${{ inputs.server_url }}
+        TG_REPOSITORY: ${{ inputs.repository }}
+      run: |
+        set -euo pipefail
+
+        # Notifications are best-effort: a bot outage must never fail a build.
+        if [ -z "${TG_TOKEN:-}" ]; then
+          echo "Telegram not configured (TG_TOKEN empty) - skipping '$TG_EVENT' notification."
+          exit 0
+        fi
+
+        if [ -z "${TG_CHAT_ID:-}" ]; then
+          echo "Telegram not configured (TG_CHAT_ID empty) - skipping '$TG_EVENT' notification."
+          exit 0
+        fi
+
+        # Single source of truth for timestamps so every message agrees on
+        # when the event happened, in unambiguous ISO 8601 with a UTC offset.
+        NOW_ISO="$(date -u '+%Y-%m-%dT%H:%M:%SZ')"
+
+        api="https://api.telegram.org/bot${TG_TOKEN}/sendMessage"
+
+        # Broadcast to every chat the bot is in. Each id in TG_CHAT_ID is a
+        # separate destination; one failing chat must not stop the others.
+        send_all() {
+          local text="$1"
+          local disable_notify="${2:-false}"
+          local sent=0
+
+          # Split on commas (and whitespace) so the secret can be written
+          # either as "id1,id2" or one per line/space.
+          local ids
+          ids="$(printf '%s' "$TG_CHAT_ID" | tr ',[:space:]' '\n')"
+
+          local id
+          while IFS= read -r id; do
+            [ -z "$id" ] && continue
+            if curl --silent --show-error --fail-with-body \
+              --retry 3 --retry-delay 2 \
+              --max-time 30 \
+              -X POST "$api" \
+              --data-urlencode "chat_id=${id}" \
+              --data-urlencode "text=${text}" \
+              --data-urlencode "parse_mode=HTML" \
+              --data-urlencode "disable_web_page_preview=true" \
+              --data-urlencode "disable_notification=${disable_notify}" \
+              >/dev/null; then
+              sent=$((sent + 1))
+            else
+              echo "WARNING: Telegram send failed for chat ${id}." >&2
+            fi
+          done <<< "$ids"
+
+          if [ "$sent" -eq 0 ]; then
+            echo "ERROR: no Telegram chat accepted the '$TG_EVENT' notification." >&2
+            return 1
+          fi
+          echo "Delivered '$TG_EVENT' to ${sent} Telegram chat(s)."
+        }
+
+        case "$TG_EVENT" in
+          start)
+            send_all "$(printf 'Luna Kernel Build Started at %s\n\n<b>%s</b>\nRun: %s/run/%s' \
+              "$NOW_ISO" \
+              "${TG_BUILD_NAME:-unknown build}" \
+              "$TG_SERVER_URL" \
+              "$TG_RUN_ID")" \
+              false
+            ;;
+          status)
+            send_all "$(printf 'Luna Kernel Build Status at %s\n\n<b>%s</b>\n%s' \
+              "$NOW_ISO" \
+              "${TG_BUILD_NAME:-unknown build}" \
+              "${TG_STATUS:-in progress}")" \
+              true
+            ;;
+          success)
+            link=""
+            if [ -n "${TG_ARTIFACT:-}" ]; then
+              link="$(printf '\n\nArtifact: <a href="%s/%s/actions/runs/%s/artifacts">%s</a>' \
+                "$TG_SERVER_URL" "$TG_REPOSITORY" "$TG_RUN_ID" "$TG_ARTIFACT")"
+            fi
+            send_all "$(printf 'Luna Kernel Build Success at %s\n\n<b>%s</b>%s' \
+              "$NOW_ISO" \
+              "${TG_BUILD_NAME:-unknown build}" \
+              "$link")" \
+              false
+            ;;
+          failure)
+            send_all "$(printf 'Luna Kernel Build Failed at %s\n\n<b>%s</b>\nLogs: %s/%s/actions/runs/%s' \
+              "$NOW_ISO" \
+              "${TG_BUILD_NAME:-unknown build}" \
+              "$TG_SERVER_URL" "$TG_REPOSITORY" "$TG_RUN_ID")" \
+              false
+            ;;
+          *)
+            echo "Unknown event '$TG_EVENT' - nothing sent."
+            exit 0
+            ;;
+        esac
+
+        echo "Telegram '$TG_EVENT' notification processed at ${NOW_ISO}."
