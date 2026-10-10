@@ -90,7 +90,7 @@ runs:
           local id
           while IFS= read -r id; do
             [ -z "$id" ] && continue
-            if curl --silent --show-error --fail-with-body \
+            if resp="$(curl --silent --show-error --fail-with-body \
               --retry 3 --retry-delay 2 \
               --max-time 30 \
               -X POST "$api" \
@@ -99,10 +99,13 @@ runs:
               --data-urlencode "parse_mode=HTML" \
               --data-urlencode "disable_web_page_preview=true" \
               --data-urlencode "disable_notification=${disable_notify}" \
-              >/dev/null; then
+              2>&1)"; then
               sent=$((sent + 1))
             else
+              # Surface Telegram's description so the log names the real cause
+              # (bad chat_id, bot not in chat, bot lacks permission, ...).
               echo "WARNING: Telegram send failed for chat ${id}." >&2
+              echo "  response: ${resp}" >&2
             fi
           done <<< "$ids"
 
