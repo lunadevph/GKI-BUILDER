@@ -73,4 +73,26 @@ for f, doc in docs.items():
 
 print()
 print("errors:", errors)
-sys.exit(1 if errors else 0)
+
+# Composite actions have no `secrets` context. Any ${{ secrets.* }} inside a
+# composite action fails at manifest-load time, before a single step runs.
+print()
+print("=== composite action secret usage ===")
+action_files = sorted(glob.glob(".github/actions/*/action.yml")
+                      + glob.glob(".github/actions/*/action.yaml"))
+secret_bad = 0
+for af in action_files:
+    with open(af, encoding="utf-8") as fh:
+        body = fh.read()
+    if re.search(r"\$\{\{[^}]*\bsecrets\.", body):
+        for i, line in enumerate(body.splitlines(), 1):
+            if re.search(r"\$\{\{[^}]*\bsecrets\.", line):
+                print("ILLEGAL  %s:%d  secrets context in composite action"
+                      % (af, i))
+                print("         %s" % line.strip())
+                secret_bad += 1
+
+print("checked %d composite action(s); illegal secret refs: %d"
+      % (len(action_files), secret_bad))
+
+sys.exit(1 if (errors or secret_bad) else 0)

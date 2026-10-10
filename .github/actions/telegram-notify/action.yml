@@ -6,11 +6,11 @@ inputs:
     description: 'Lifecycle event: start, status, success, or failure'
     required: true
   bot_token:
-    description: 'Telegram bot token. Leave empty to read the TELEGRAM_BOT_TOKEN secret.'
+    description: 'Telegram bot token. Supplied by the calling workflow from the TELEGRAM_BOT_TOKEN secret.'
     required: false
     default: ''
   chat_id:
-    description: 'Telegram chat id(s). Comma-separated to broadcast to every channel the bot is in. Leave empty to read TELEGRAM_CHAT_ID.'
+    description: 'Telegram chat id(s), comma-separated for multiple channels. Supplied by the calling workflow from the TELEGRAM_CHAT_ID secret.'
     required: false
     default: ''
   build_name:
@@ -44,8 +44,10 @@ runs:
     - name: Send Telegram notification
       shell: bash
       env:
-        TG_TOKEN: ${{ inputs.bot_token || secrets.TELEGRAM_BOT_TOKEN }}
-        TG_CHAT_ID: ${{ inputs.chat_id || secrets.TELEGRAM_CHAT_ID }}
+        # NOTE: composite actions have no `secrets` context. The calling
+        # workflow passes the secrets in explicitly via these inputs.
+        TG_TOKEN: ${{ inputs.bot_token }}
+        TG_CHAT_ID: ${{ inputs.chat_id }}
         TG_EVENT: ${{ inputs.event }}
         TG_BUILD_NAME: ${{ inputs.build_name }}
         TG_STATUS: ${{ inputs.status }}

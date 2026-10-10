@@ -214,6 +214,8 @@ jobs:
       with:
         event: start
         build_name: ${{ steps.extract.outputs.file_name }}
+        bot_token: ${{ secrets.TELEGRAM_BOT_TOKEN }}
+        chat_id: ${{ secrets.TELEGRAM_CHAT_ID }}
 
     - name: Notify Build In Progress
       if: inputs.telegram_notify
@@ -222,6 +224,8 @@ jobs:
         event: status
         build_name: ${{ steps.extract.outputs.file_name }}
         status: 'Patches applied. Compiling kernel now.'
+        bot_token: ${{ secrets.TELEGRAM_BOT_TOKEN }}
+        chat_id: ${{ secrets.TELEGRAM_CHAT_ID }}
 
     - name: Kernel Fixes
       uses: ./.github/actions/kernel-fixes
@@ -739,6 +743,8 @@ jobs:
         event: success
         build_name: ${{ steps.extract.outputs.file_name }}
         artifact_name: ${{ steps.extract.outputs.file_name }}-AnyKernel3
+        bot_token: ${{ secrets.TELEGRAM_BOT_TOKEN }}
+        chat_id: ${{ secrets.TELEGRAM_CHAT_ID }}
 
     - name: Notify Build Failed
       if: failure() && inputs.telegram_notify
@@ -746,6 +752,8 @@ jobs:
       with:
         event: failure
         build_name: ${{ steps.extract.outputs.file_name }}
+        bot_token: ${{ secrets.TELEGRAM_BOT_TOKEN }}
+        chat_id: ${{ secrets.TELEGRAM_CHAT_ID }}
 
     - name: Write Build-verified only artifact metadata
       if: success() && inputs.root_flavor != '' && inputs.root_flavor != 'none'

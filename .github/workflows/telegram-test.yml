@@ -1,0 +1,106 @@
+name: Telegram Test
+description: >
+  Verify the Telegram bot and chat ids without running a kernel build.
+  Sends one 'start' and one 'success' test message to every configured chat.
+
+on:
+  workflow_dispatch:
+    inputs:
+      send_success_sample:
+        description: "Also send a sample 'success' message with a fake artifact link"
+        type: boolean
+        default: true
+
+permissions:
+  contents: read
+
+jobs:
+  telegram-test:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+    - name: Checkout Repository
+      uses: actions/checkout@v7
+
+    - name: Report configured secrets
+      shell: bash
+      env:
+        TG_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
+        TG_CHAT_ID: ${{ secrets.TELEGRAM_CHAT_ID }}
+      run: |
+        set -euo pipefail
+        if [ -z "${TG_TOKEN:-}" ]; then
+          echo "::error::TELEGRAM_BOT_TOKEN secret is not set."
+          exit 1
+        fi
+        if [ -z "${TG_CHAT_ID:-}" ]; then
+          echo "::error::TELEGRAM_CHAT_ID secret is not set."
+          exit 1
+        fi
+        echo "TELEGRAM_BOT_TOKEN: set (${#TG_TOKEN} chars)"
+        # Never echo the secret itself.
+        echo "TELEGRAM_CHAT_ID: ${TG_CHAT_ID}"
+
+    - name: Verify bot identity via getMe
+      shell: bash
+      env:
+        TG_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
+      run: |
+        set -euo pipefail
+        echo "Checking the bot token is valid..."
+        if ! resp="$(curl --silent --show-error --fail-with-body \
+              --max-time 30 \
+              "https://api.telegram.org/bot${TG_TOKEN}/getMe")"; then
+          echo "::error::getMe failed - the bot token looks invalid."
+          exit 1
+        fi
+        # Pull username out of the JSON without needing jq.
+        echo "getMe response: ${resp}"
+        case "$resp" in
+          *'"ok":true'*) echo "Bot token is valid." ;;
+          *) echo "::error::getMe did not return ok:true"; exit 1 ;;
+        esac
+
+    - name: Send start test message
+      id: send-start
+      uses: ./.github/actions/telegram-notify
+      with:
+        event: start
+        build_name: "Telegram API test (no build)"
+        bot_token: ${{ secrets.TELEGRAM_BOT_TOKEN }}
+        chat_id: ${{ secrets.TELEGRAM_CHAT_ID }}
+
+    - name: Send success sample message
+      id: send-success
+      if: inputs.send_success_sample
+      uses: ./.github/actions/telegram-notify
+      with:
+        event: success
+        build_name: "Telegram API test (no build)"
+        artifact_name: "sample-AnyKernel3"
+        bot_token: ${{ secrets.TELEGRAM_BOT_TOKEN }}
+        chat_id: ${{ secrets.TELEGRAM_CHAT_ID }}
+
+    - name: Summary
+      if: always()
+      shell: bash
+      env:
+        START_OUTCOME: ${{ steps.send-start.outcome }}
+        SUCCESS_OUTCOME: ${{ steps.send-success.outcome }}
+      run: |
+        {
+          echo "### Telegram API test"
+          echo
+          echo "- getMe: bot token valid"
+          echo "- start message: \`${START_OUTCOME}\`"
+          echo "- success message: \`${SUCCESS_OUTCOME}\`"
+          echo
+          if [ "${START_OUTCOME}" = "success" ]; then
+            echo "Messages were accepted by every configured chat."
+          else
+            echo "**Delivery failed.** Common causes:"
+            echo "- bot is not an admin in the channel"
+            echo "- chat id is wrong (channels look like \`-100...\`)"
+            echo "- bot cannot send to that chat (start it once in a DM first)"
+          fi
+        } >> "$GITHUB_STEP_SUMMARY"
