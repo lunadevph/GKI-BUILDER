@@ -7,7 +7,11 @@ on:
   workflow_dispatch:
     inputs:
       send_success_sample:
-        description: "Also send a sample 'success' message with a fake artifact link"
+        description: "Send a sample 'success' message with a fake artifact link"
+        type: boolean
+        default: true
+      send_failure_sample:
+        description: "Send a sample 'failure' message (styling preview only)"
         type: boolean
         default: true
 
@@ -70,7 +74,17 @@ jobs:
         bot_token: ${{ secrets.TELEGRAM_BOT_TOKEN }}
         chat_id: ${{ secrets.TELEGRAM_CHAT_ID }}
 
-    - name: Send success sample message
+    - name: Send status test message
+      id: send-status
+      uses: ./.github/actions/telegram-notify
+      with:
+        event: status
+        build_name: "Telegram API test (no build)"
+        status: "Patches applied. Compiling kernel now."
+        bot_token: ${{ secrets.TELEGRAM_BOT_TOKEN }}
+        chat_id: ${{ secrets.TELEGRAM_CHAT_ID }}
+
+    - name: Send success test message
       id: send-success
       if: inputs.send_success_sample
       uses: ./.github/actions/telegram-notify
@@ -81,26 +95,41 @@ jobs:
         bot_token: ${{ secrets.TELEGRAM_BOT_TOKEN }}
         chat_id: ${{ secrets.TELEGRAM_CHAT_ID }}
 
+    - name: Send failure test message
+      id: send-failure
+      if: inputs.send_failure_sample
+      uses: ./.github/actions/telegram-notify
+      with:
+        event: failure
+        build_name: "Telegram API test (no build)"
+        bot_token: ${{ secrets.TELEGRAM_BOT_TOKEN }}
+        chat_id: ${{ secrets.TELEGRAM_CHAT_ID }}
+
     - name: Summary
       if: always()
       shell: bash
       env:
         START_OUTCOME: ${{ steps.send-start.outcome }}
+        STATUS_OUTCOME: ${{ steps.send-status.outcome }}
         SUCCESS_OUTCOME: ${{ steps.send-success.outcome }}
+        FAILURE_OUTCOME: ${{ steps.send-failure.outcome }}
       run: |
         {
           echo "### Telegram API test"
           echo
-          echo "- getMe: bot token valid"
-          echo "- start message: \`${START_OUTCOME}\`"
-          echo "- success message: \`${SUCCESS_OUTCOME}\`"
+          echo "- getMe: \`bot token valid\`"
+          echo "- start:   \`${START_OUTCOME}\`"
+          echo "- status:  \`${STATUS_OUTCOME}\`"
+          echo "- success: \`${SUCCESS_OUTCOME}\`"
+          echo "- failure: \`${FAILURE_OUTCOME}\`"
           echo
           if [ "${START_OUTCOME}" = "success" ]; then
-            echo "Messages were accepted by every configured chat."
+            echo "You should see four messages in the channel with emoji + inline buttons."
+            echo "The \`failure\` one is a styling sample only - no build actually failed."
           else
             echo "**Delivery failed.** Common causes:"
             echo "- bot is not an admin in the channel"
             echo "- chat id is wrong (channels look like \`-100...\`)"
-            echo "- bot cannot send to that chat (start it once in a DM first)"
+            echo "- bot cannot post until started once in a DM"
           fi
         } >> "$GITHUB_STEP_SUMMARY"
