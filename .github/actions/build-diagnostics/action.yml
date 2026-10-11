@@ -1,0 +1,65 @@
+name: 'Luna Build Diagnostics'
+description: 'Turn a raw kernel build log into a short, bounded, secret-scrubbed failure explanation suitable for a chat notification.'
+
+inputs:
+  log_file:
+    description: 'Path to the captured build log (luna_build.log).'
+    required: false
+    default: ''
+  fallback:
+    description: 'Text to use when no log is available.'
+    required: false
+    default: 'Build failed. No build log was captured, so the cause is unknown.'
+  max_lines:
+    description: 'Maximum number of diagnostic lines to extract.'
+    required: false
+    default: '14'
+  max_chars:
+    description: 'Maximum characters in the extracted explanation.'
+    required: false
+    default: '900'
+
+outputs:
+  summary:
+    description: 'Bounded, human readable failure explanation.'
+    value: ${{ steps.extract.outputs.summary }}
+
+runs:
+  using: 'composite'
+  steps:
+    - name: Extract failure diagnostics
+      id: extract
+      shell: bash
+      env:
+        LOG_FILE: ${{ inputs.log_file }}
+        FALLBACK: ${{ inputs.fallback }}
+        MAX_LINES: ${{ inputs.max_lines }}
+        MAX_CHARS: ${{ inputs.max_chars }}
+      run: |
+        set -uo pipefail
+
+        # Diagnostics are an enhancement, never a build blocker: a failure to
+        # diagnose must not turn one broken build into two broken steps.
+        if [ -z "$LOG_FILE" ] || [ ! -s "$LOG_FILE" ]; then
+          echo "summary=$FALLBACK" >> "$GITHUB_OUTPUT"
+          echo "::notice::Luna Build Diagnostics: no build log at '${LOG_FILE:-<unset>}', using fallback text."
+          exit 0
+        fi
+
+        summary="$(bash "${{ github.action_path }}/../../scripts/luna_error_extract.sh" \
+          "$LOG_FILE" "$MAX_LINES" "$MAX_CHARS" 2>/dev/null || true)"
+
+        if [ -z "$summary" ]; then
+          summary="$FALLBACK"
+        fi
+
+        # Never let a newline break the GITHUB_OUTPUT heredoc format.
+        summary="$(printf '%s' "$summary" | tr -d '\r' | head -c "$MAX_CHARS")"
+
+        {
+          echo 'summary<<LUNA_SUMMARY_EOF'
+          printf '%s\n' "$summary"
+          echo 'LUNA_SUMMARY_EOF'
+        } >> "$GITHUB_OUTPUT"
+
+        echo "::notice::Luna Build Diagnostics extracted $(printf '%s' "$summary" | wc -c) characters from the build log."

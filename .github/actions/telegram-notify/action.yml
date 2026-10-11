@@ -14,7 +14,7 @@ inputs:
     required: false
     default: ''
   build_name:
-    description: 'Human readable build identifier.'
+    description: 'Human readable build identifier. Falls back to LUNA_BUILD_NAME.'
     required: false
     default: ''
   kernel_version:
@@ -22,9 +22,13 @@ inputs:
     required: false
     default: ''
   stage_index:
-    description: 'Zero-based index into the canonical pipeline. -1 when unknown.'
+    description: 'Zero-based index into the canonical pipeline. -1 when unknown. Ignored when `stage` is set.'
     required: false
     default: '-1'
+  stage:
+    description: 'Canonical stage NAME, e.g. "Compile Kernel". Preferred over `stage_index`; resolves via lib.sh so it can never drift.'
+    required: false
+    default: ''
   failed_stage:
     description: 'Name of the stage that failed.'
     required: false
@@ -45,6 +49,10 @@ inputs:
     description: 'Bypass the rate limiter (1 = always publish).'
     required: false
     default: '0'
+  notify:
+    description: 'Ping the chat for this update (1 = notify). Defaults to 0 for intermediate stages, 1 for terminal states.'
+    required: false
+    default: ''
   run_id:
     description: 'GitHub Actions run id.'
     required: false
@@ -79,11 +87,13 @@ runs:
         BUILD_NAME: ${{ inputs.build_name }}
         KERNEL_VERSION: ${{ inputs.kernel_version }}
         STAGE_INDEX: ${{ inputs.stage_index }}
+        STAGE_NAME: ${{ inputs.stage }}
         FAILED_STAGE: ${{ inputs.failed_stage }}
         ERROR_SUMMARY: ${{ inputs.error_summary }}
         ARTIFACT_INFO_FILE: ${{ inputs.artifact_info_file }}
         PROGRESS_PERCENT: ${{ inputs.progress_percent }}
         FORCE: ${{ inputs.force }}
+        NOTIFY: ${{ inputs.notify }}
         RUN_ID: ${{ inputs.run_id }}
         RUN_ATTEMPT: ${{ inputs.run_attempt }}
         SERVER_URL: ${{ inputs.server_url }}
@@ -95,7 +105,7 @@ runs:
         # Notifications are strictly best effort: a Telegram outage must never
         # fail a kernel build.
         if [ -z "${TG_TOKEN:-}" ] || [ -z "${TG_CHAT_ID:-}" ]; then
-          echo "Telegram not configured (TG_TOKEN/TG_CHAT_ID empty) - skipping."
+          echo "::warning::Luna Build Agent: Telegram is not configured (TELEGRAM_BOT_TOKEN / TELEGRAM_CHAT_ID missing). No notification will be sent."
           exit 0
         fi
 
@@ -106,47 +116,92 @@ runs:
         export LUNA_TG_CHAT_ID="$TG_CHAT_ID"
         export LUNA_RUN_ID="$RUN_ID"
         export LUNA_STATE_DIR="$STATE_DIR"
-        export LUNA_KERNEL_VERSION="$KERNEL_VERSION"
-        export LUNA_BUILD_NAME="$BUILD_NAME"
+        export LUNA_KERNEL_VERSION="${KERNEL_VERSION:-${LUNA_KERNEL_VERSION:-}}"
+        export LUNA_BUILD_NAME="${BUILD_NAME:-${LUNA_BUILD_NAME:-}}"
         export LUNA_RUN_URL="${SERVER_URL}/${REPOSITORY}/actions/runs/${RUN_ID}"
         export LUNA_PROGRESS_PERCENT="$PROGRESS_PERCENT"
 
         [ -n "$RUN_ATTEMPT" ] && [ "$RUN_ATTEMPT" != "1" ] && \
           LUNA_BUILD_NAME="${LUNA_BUILD_NAME} (retry #${RUN_ATTEMPT})"
 
+        # Resolve the stage index. A stage NAME always wins over a raw index:
+        # it is resolved against the canonical LUNA_STAGES list, so reordering
+        # that list cannot silently desynchronise the workflow wiring.
+        stage_idx="$STAGE_INDEX"
+        if [ -n "${STAGE_NAME:-}" ]; then
+          resolved="$(luna_stage_index "$STAGE_NAME")"
+          if [ "$resolved" = "-1" ]; then
+            luna_warn "unknown stage name '${STAGE_NAME}' - falling back to STAGE_INDEX"
+          else
+            stage_idx="$resolved"
+          fi
+        fi
+
+        # Terminal states ping by default; intermediate updates are delivered
+        # silently so a busy channel is not pinged every twenty seconds. The
+        # caller can override either way with an explicit `notify`.
+        silent="${NOTIFY:-}"
+        if [ -z "$silent" ]; then
+          case "$EV" in
+            success|failure) silent=0 ;;
+            *)               silent=1 ;;
+          esac
+        elif [ "$silent" = "1" ]; then
+          silent=0
+        else
+          silent=1
+        fi
+
         case "$EV" in
           start)
             luna_state_init >/dev/null
-            luna_stage_set_current 0 active
-            msg="$(luna_render RUNNING 0 '' '' "$ARTIFACT_INFO_FILE")"
-            luna_publish "$msg" RUNNING 1 || true
+            luna_stage_set_current "${stage_idx:-0}" active
+            msg="$(luna_render RUNNING "${stage_idx:-0}" '' '' "$ARTIFACT_INFO_FILE")"
+            luna_publish "$msg" RUNNING 1 "$silent" 0 || true
             ;;
 
           stage)
-            luna_state_set_current "${STAGE_INDEX:-0}" active
-            msg="$(luna_render RUNNING "${STAGE_INDEX:-0}" '' '' "$ARTIFACT_INFO_FILE")"
-            luna_publish "$msg" RUNNING "${FORCE:-0}" || true
+            luna_stage_set_current "${stage_idx:-0}" active
+            msg="$(luna_render RUNNING "${stage_idx:-0}" '' '' "$ARTIFACT_INFO_FILE")"
+            luna_publish "$msg" RUNNING "${FORCE:-0}" "$silent" 0 || true
             ;;
 
-        success)
-            # Every stage completed: mark the whole pipeline done.
-            luna_stage_set_current 7 done
+          success)
+            # Every stage completed: mark the whole pipeline done. The index is
+            # derived from LUNA_STAGES rather than hardcoded, so adding a stage
+            # cannot leave the last one stuck as pending.
+            luna_stage_set_current "$LUNA_LAST_STAGE" done
             luna_state_set final "$(luna_now_epoch)"
-            msg="$(luna_render SUCCESS 7 '' '' "$ARTIFACT_INFO_FILE")"
-            luna_publish "$msg" SUCCESS 1 || true
+            msg="$(luna_render SUCCESS "$LUNA_LAST_STAGE" '' '' "$ARTIFACT_INFO_FILE")"
+            luna_publish "$msg" SUCCESS 1 "$silent" 1 || true
             ;;
 
           failure)
-            idx="${STAGE_INDEX:-}"
+            idx="${stage_idx:-}"
             if [ -n "$idx" ] && [ "$idx" -ge 0 ] 2>/dev/null; then
               luna_stage_set_current "$idx" failed
+            else
+              # No usable stage was supplied. Rather than guessing a single
+              # hardcoded label for every failure in the job, attribute it to
+              # the furthest stage the pipeline actually reached.
+              idx="$(luna_stage_furthest_idx)"
+              if [ "$idx" -ge 0 ] 2>/dev/null; then
+                luna_warn "no stage supplied for failure; attributing it to '${LUNA_STAGES[$idx]}' (furthest stage reached)"
+                luna_stage_set_current "$idx" failed
+              else
+                luna_warn "failure reported before any stage was reached"
+              fi
+            fi
+            # Name the stage when the caller did not, now that we know it.
+            if [ -z "$FAILED_STAGE" ] && [ "$idx" -ge 0 ] 2>/dev/null; then
+              FAILED_STAGE="${LUNA_STAGES[$idx]}"
             fi
             msg="$(luna_render FAILED "${idx:--1}" "$FAILED_STAGE" "$ERROR_SUMMARY" "$ARTIFACT_INFO_FILE")"
-            luna_publish "$msg" FAILED 1 || true
+            luna_publish "$msg" FAILED 1 "$silent" 1 || true
             ;;
 
           *)
-            echo "Unknown event '$EV' - nothing sent."
+            echo "::warning::Luna Build Agent: unknown event '${EV}' - nothing sent."
             exit 0
             ;;
         esac

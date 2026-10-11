@@ -62,23 +62,77 @@ jobs:
         echo "canonical stages: ${#LUNA_STAGES[@]}"
         for s in "${LUNA_STAGES[@]}"; do echo "  - $s"; done
         echo
-        # Stages the workflow actually notifies about.
+        # Stages the workflow actually notifies about, by NAME.
         echo "stage events wired in build.yml:"
-        grep -oE "stage_index: '[0-9]+'" .github/workflows/build.yml | sort -u
-        n="$(grep -cE "stage_index: '[0-9]+'" .github/workflows/build.yml)"
-        echo "count=$n"
-        if [ "$n" -lt 5 ]; then
-          echo "::error::expected stage markers for the pipeline, found only $n"
+        missing=0
+        for s in "${LUNA_STAGES[@]}"; do
+          if grep -qF "stage: '$s'" .github/workflows/build.yml; then
+            echo "  ok      $s"
+          else
+            echo "  MISSING $s"
+            missing=$((missing + 1))
+          fi
+        done
+        if [ "$missing" -ne 0 ]; then
+          echo "::error::$missing canonical stage(s) have no notification in build.yml"
+          exit 1
+        fi
+        # Raw indices are banned: they are what allowed the wiring to drift.
+        if grep -q 'stage_index:' .github/workflows/build.yml; then
+          echo "::error::build.yml still uses raw stage_index values; wire stages by name"
           exit 1
         fi
 
-    # ---------------- successful pipeline simulation ----------------
+    - name: Verify failure diagnostics against a real make log
+      id: simdiag
+      shell: bash
+      run: |
+        set -uo pipefail
+        LOG="$RUNNER_TEMP/sim-build.log"
+        # Written with printf rather than a heredoc: a heredoc body would have
+        # to be indented past the YAML block scalar's indentation, and getting
+        # that wrong silently terminates the block.
+        {
+          printf '  CC [M]  drivers/char/vt/vt.o\n'
+          printf '  LD [M]  vmlinux\n'
+          printf 'arm64-linux-gnu-ld: error: undefined reference to `__stack_chk_fail`\n'
+          printf 'make[2]: *** [Makefile:1234: net/socket.o] Error 1\n'
+          printf 'make: *** [Makefile:9912: Makefile] Error 2\n'
+        } > "$LOG"
+        OUT="$(bash .github/scripts/luna_error_extract.sh "$LOG")"
+        echo "$OUT"
+        case "$OUT" in
+          *"undefined reference"*) echo "Extracted the real compiler error." ;;
+          *) echo "::error::extractor did not surface the linker error"; exit 1 ;;
+        esac
+        case "$OUT" in
+          *"net/socket.o"*) echo "Extracted the failing target." ;;
+          *) echo "::error::extractor did not surface the failing target"; exit 1 ;;
+        esac
+        {
+          echo 'path<<LUNA_LOG_EOF'
+          printf '%s\n' "$LOG"
+          echo 'LUNA_LOG_EOF'
+        } >> "$GITHUB_OUTPUT"
+
     - name: 'Sim: start'
       uses: ./.github/actions/telegram-notify
       with:
         event: start
+        stage: 'Environment Setup'
         build_name: '5.15.220-android13 (gki)'
         kernel_version: '5.15.220-android13-lts-KernelSU-Next'
+        bot_token: ${{ secrets.TELEGRAM_BOT_TOKEN }}
+        chat_id: ${{ secrets.TELEGRAM_CHAT_ID }}
+
+    - name: 'Sim: stage 1 Fetch Kernel Source'
+      uses: ./.github/actions/telegram-notify
+      with:
+        event: stage
+        stage: 'Fetch Kernel Source'
+        build_name: '5.15.220-android13 (gki)'
+        kernel_version: '5.15.220-android13-lts-KernelSU-Next'
+        force: '1'
         bot_token: ${{ secrets.TELEGRAM_BOT_TOKEN }}
         chat_id: ${{ secrets.TELEGRAM_CHAT_ID }}
 
@@ -86,7 +140,7 @@ jobs:
       uses: ./.github/actions/telegram-notify
       with:
         event: stage
-        stage_index: '2'
+        stage: 'Apply Patches'
         build_name: '5.15.220-android13 (gki)'
         kernel_version: '5.15.220-android13-lts-KernelSU-Next'
         force: '1'
@@ -97,7 +151,7 @@ jobs:
       uses: ./.github/actions/telegram-notify
       with:
         event: stage
-        stage_index: '5'
+        stage: 'Compile Kernel'
         build_name: '5.15.220-android13 (gki)'
         kernel_version: '5.15.220-android13-lts-KernelSU-Next'
         force: '1'
@@ -135,19 +189,39 @@ jobs:
       uses: ./.github/actions/telegram-notify
       with:
         event: start
+        stage: 'Environment Setup'
         build_name: '5.15.220-android13 (gki) [SIM FAIL]'
         kernel_version: '5.15.220-android13-lts-KernelSU-Next'
         bot_token: ${{ secrets.TELEGRAM_BOT_TOKEN }}
         chat_id: ${{ secrets.TELEGRAM_CHAT_ID }}
 
-    - name: 'Sim: failure at compile'
+    - name: 'Sim: failure at compile (real extracted diagnostics)'
+      id: simdiagfail
+      if: inputs.send_failure_simulation
+      uses: ./.github/actions/build-diagnostics
+      with:
+        log_file: ${{ steps.simdiag.outputs.path }}
+        fallback: 'simulated compile failure'
+
+    - name: 'Sim: notify compile failure'
       if: inputs.send_failure_simulation
       uses: ./.github/actions/telegram-notify
       with:
         event: failure
-        stage_index: '5'
+        stage: 'Compile Kernel'
         failed_stage: 'Compile Kernel'
-        error_summary: 'LD: undefined reference to `foo_symbol` (simulated)'
+        error_summary: ${{ steps.simdiagfail.outputs.summary }}
+        build_name: '5.15.220-android13 (gki) [SIM FAIL]'
+        kernel_version: '5.15.220-android13-lts-KernelSU-Next'
+        bot_token: ${{ secrets.TELEGRAM_BOT_TOKEN }}
+        chat_id: ${{ secrets.TELEGRAM_CHAT_ID }}
+
+    - name: 'Sim: failure with no stage supplied (auto-attribution)'
+      if: inputs.send_failure_simulation
+      uses: ./.github/actions/telegram-notify
+      with:
+        event: failure
+        error_summary: 'Failure with no stage supplied - the agent should name the furthest stage it reached.'
         build_name: '5.15.220-android13 (gki) [SIM FAIL]'
         kernel_version: '5.15.220-android13-lts-KernelSU-Next'
         bot_token: ${{ secrets.TELEGRAM_BOT_TOKEN }}
@@ -163,7 +237,12 @@ jobs:
           echo "Check the Telegram channel for:"
           echo "- a RUNNING message that was edited in place through the pipeline"
           echo "- a SUCCESS message with real artifact sizes + sha256 prefixes"
-          echo "- optionally a FAILED message naming \`Compile Kernel\`"
+          echo "- a FAILED message naming \`Compile Kernel\` and quoting the **real**"
+          echo "  linker error extracted from a genuine make log, not \"see the run log\""
+          echo
+          echo "The terminal SUCCESS/FAILED messages are sent as new messages on"
+          echo "purpose: Telegram raises no notification for an edited message, so"
+          echo "editing the result would mean nobody was told the build finished."
           echo
           echo "If nothing arrived, the usual causes are: the bot is not an admin"
           echo "in the channel, or the chat id is wrong (channels look like \`-100...\`)."

@@ -54,7 +54,16 @@ runs:
       shell: bash
       working-directory: ${{ github.workspace }}/kernel
       run: |
+        set -uo pipefail
         PAGE_SIZE="${{ inputs.page_size }}"
+
+        # Capture the full compiler output to a log so a failure can be
+        # diagnosed later. Without this there is no artefact to explain a
+        # failure: the notification agent had nothing but "see the run log".
+        # PIPESTATUS is checked explicitly so `tee` cannot mask the real exit
+        # code and report a failed kernel build as a success.
+        LUNA_BUILD_LOG="${{ github.workspace }}/luna_build.log"
+
         sed -i 's/check_defconfig//' ./common/build.config.gki
         if [ -f "build/build.sh" ]; then
           if [ "$PAGE_SIZE" != "4k" ]; then
@@ -74,7 +83,8 @@ runs:
           CXX="/usr/bin/ccache clang++" \
           HOSTCC="/usr/bin/ccache clang" \
           HOSTCXX="/usr/bin/ccache clang++" \
-          build/build.sh -j"$(nproc)"
+          build/build.sh -j"$(nproc)" 2>&1 | tee -a "$LUNA_BUILD_LOG"
+          rc="${PIPESTATUS[0]}"
         else
           sed -i '/name = "kernel_aarch64",/a\    check_defconfig = "disabled",' common/BUILD.bazel
           PAGE_SIZE_FLAGS=()
@@ -85,8 +95,14 @@ runs:
             --config=fast \
             "${PAGE_SIZE_FLAGS[@]}" \
             --disk_cache=/home/runner/.cache/bazel \
-            //common:kernel_aarch64/Image
+            //common:kernel_aarch64/Image 2>&1 | tee -a "$LUNA_BUILD_LOG"
+          rc="${PIPESTATUS[0]}"
         fi
+
+        if [ "$rc" -ne 0 ]; then
+          echo "::error::Kernel build failed with exit code $rc (full log: $LUNA_BUILD_LOG)"
+        fi
+        exit "$rc"
 
     - name: 'Verify Page Size in Generated .config'
       shell: bash

@@ -213,6 +213,22 @@ jobs:
       uses: ./.github/actions/telegram-notify
       with:
         event: start
+        stage: 'Environment Setup'
+        build_name: ${{ steps.extract.outputs.file_name }}
+        kernel_version: ${{ inputs.kernel_version }}.${{ inputs.sublevel }}-${{ inputs.android_version }}-${{ inputs.os_patch_level }}
+        bot_token: ${{ secrets.TELEGRAM_BOT_TOKEN }}
+        chat_id: ${{ secrets.TELEGRAM_CHAT_ID }}
+
+    - name: Notify Stage - Fetch Kernel Source
+      if: inputs.telegram_notify
+      uses: ./.github/actions/telegram-notify
+      with:
+        event: stage
+        # This stage previously had NO notification at all, so it sat at the
+        # pending marker for the entire first half of every build and then
+        # flipped straight to done. Placed after the extract step because it
+        # needs that step's output for the build name.
+        stage: 'Fetch Kernel Source'
         build_name: ${{ steps.extract.outputs.file_name }}
         kernel_version: ${{ inputs.kernel_version }}.${{ inputs.sublevel }}-${{ inputs.android_version }}-${{ inputs.os_patch_level }}
         bot_token: ${{ secrets.TELEGRAM_BOT_TOKEN }}
@@ -223,7 +239,7 @@ jobs:
       uses: ./.github/actions/telegram-notify
       with:
         event: stage
-        stage_index: '2'
+        stage: 'Apply Patches'
         build_name: ${{ steps.extract.outputs.file_name }}
         kernel_version: ${{ inputs.kernel_version }}.${{ inputs.sublevel }}-${{ inputs.android_version }}-${{ inputs.os_patch_level }}
         bot_token: ${{ secrets.TELEGRAM_BOT_TOKEN }}
@@ -506,7 +522,7 @@ jobs:
       uses: ./.github/actions/telegram-notify
       with:
         event: stage
-        stage_index: '3'
+        stage: 'Prepare Toolchain'
         build_name: ${{ steps.extract.outputs.file_name }}
         kernel_version: ${{ inputs.kernel_version }}.${{ inputs.sublevel }}-${{ inputs.android_version }}-${{ inputs.os_patch_level }}
         bot_token: ${{ secrets.TELEGRAM_BOT_TOKEN }}
@@ -595,7 +611,7 @@ jobs:
       uses: ./.github/actions/telegram-notify
       with:
         event: stage
-        stage_index: '4'
+        stage: 'Configure Kernel'
         build_name: ${{ steps.extract.outputs.file_name }}
         kernel_version: ${{ inputs.kernel_version }}.${{ inputs.sublevel }}-${{ inputs.android_version }}-${{ inputs.os_patch_level }}
         bot_token: ${{ secrets.TELEGRAM_BOT_TOKEN }}
@@ -606,7 +622,7 @@ jobs:
       uses: ./.github/actions/telegram-notify
       with:
         event: stage
-        stage_index: '5'
+        stage: 'Compile Kernel'
         build_name: ${{ steps.extract.outputs.file_name }}
         kernel_version: ${{ inputs.kernel_version }}.${{ inputs.sublevel }}-${{ inputs.android_version }}-${{ inputs.os_patch_level }}
         force: '1'
@@ -629,31 +645,22 @@ jobs:
         version: ${{ inputs.version }}
         page_size: ${{ inputs.page_size }}
 
-    - name: Capture compile failure details
+    - name: Diagnose compile failure
       id: compile_failure
       if: failure() && steps.compile.outcome == 'failure'
-      shell: bash
-      run: |
-        set -uo pipefail
-        {
-          echo "outcome=Compile Kernel failed"
-          echo "exit_code=1"
-        } >> "$GITHUB_OUTPUT"
-        # Keep a bounded local diagnostic tail for the report.
-        mkdir -p "${{ runner.temp }}/luna-diag"
-        if [ -f "${{ github.workspace }}/luna_build.log" ]; then
-          tail -n 60 "${{ github.workspace }}/luna_build.log" \
-            > "${{ runner.temp }}/luna-diag/compile-tail.log" || true
-        fi
+      uses: ./.github/actions/build-diagnostics
+      with:
+        log_file: ${{ github.workspace }}/luna_build.log
+        fallback: 'Kernel compile failed. The build log produced no recognisable compiler error.'
 
     - name: Notify Compile Failed
       if: failure() && steps.compile.outcome == 'failure' && inputs.telegram_notify
       uses: ./.github/actions/telegram-notify
       with:
         event: failure
-        stage_index: '5'
+        stage: 'Compile Kernel'
         failed_stage: 'Compile Kernel'
-        error_summary: 'Kernel compile failed. See the run log for the failing target.'
+        error_summary: ${{ steps.compile_failure.outputs.summary }}
         build_name: ${{ steps.extract.outputs.file_name }}
         kernel_version: ${{ inputs.kernel_version }}.${{ inputs.sublevel }}-${{ inputs.android_version }}-${{ inputs.os_patch_level }}
         bot_token: ${{ secrets.TELEGRAM_BOT_TOKEN }}
@@ -671,7 +678,7 @@ jobs:
       uses: ./.github/actions/telegram-notify
       with:
         event: stage
-        stage_index: '6'
+        stage: 'Verify Artifacts'
         build_name: ${{ steps.extract.outputs.file_name }}
         kernel_version: ${{ inputs.kernel_version }}.${{ inputs.sublevel }}-${{ inputs.android_version }}-${{ inputs.os_patch_level }}
         bot_token: ${{ secrets.TELEGRAM_BOT_TOKEN }}
@@ -852,31 +859,7 @@ jobs:
       uses: ./.github/actions/telegram-notify
       with:
         event: stage
-        stage_index: '7'
-        build_name: ${{ steps.extract.outputs.file_name }}
-        kernel_version: ${{ inputs.kernel_version }}.${{ inputs.sublevel }}-${{ inputs.android_version }}-${{ inputs.os_patch_level }}
-        bot_token: ${{ secrets.TELEGRAM_BOT_TOKEN }}
-        chat_id: ${{ secrets.TELEGRAM_CHAT_ID }}
-
-    - name: Notify Build Success
-      if: success() && inputs.telegram_notify
-      uses: ./.github/actions/telegram-notify
-      with:
-        event: success
-        build_name: ${{ steps.extract.outputs.file_name }}
-        kernel_version: ${{ inputs.kernel_version }}.${{ inputs.sublevel }}-${{ inputs.android_version }}-${{ inputs.os_patch_level }}
-        artifact_info_file: ${{ steps.artifacts.outputs.path }}
-        bot_token: ${{ secrets.TELEGRAM_BOT_TOKEN }}
-        chat_id: ${{ secrets.TELEGRAM_CHAT_ID }}
-
-    - name: Notify Build Failed
-      if: failure() && inputs.telegram_notify && steps.compile.outcome != 'failure'
-      uses: ./.github/actions/telegram-notify
-      with:
-        event: failure
-        stage_index: '6'
-        failed_stage: 'Post-compile verification'
-        error_summary: 'A post-compile step failed. See the run log.'
+        stage: 'Publish Artifacts'
         build_name: ${{ steps.extract.outputs.file_name }}
         kernel_version: ${{ inputs.kernel_version }}.${{ inputs.sublevel }}-${{ inputs.android_version }}-${{ inputs.os_patch_level }}
         bot_token: ${{ secrets.TELEGRAM_BOT_TOKEN }}
@@ -1078,3 +1061,41 @@ jobs:
         path: /tmp/build-summary-${{ env.SUMMARY_BASE }}.md
         if-no-files-found: warn
         compression-level: 9
+
+    # ---------------------------------------------------------------------
+    # Terminal notifications.
+    #
+    # These deliberately run LAST, after artifact verification and the summary
+    # upload. Previously SUCCESS was published before both of those steps, so a
+    # failure in either one left the channel showing a green SUCCESS with a
+    # Download button pointing at artifacts that were never verified - and sent
+    # no failure notification at all, because the failure handler had already
+    # been passed.
+    # ---------------------------------------------------------------------
+    - name: Notify Build Success
+      if: success() && inputs.telegram_notify
+      uses: ./.github/actions/telegram-notify
+      with:
+        event: success
+        build_name: ${{ steps.extract.outputs.file_name }}
+        kernel_version: ${{ inputs.kernel_version }}.${{ inputs.sublevel }}-${{ inputs.android_version }}-${{ inputs.os_patch_level }}
+        artifact_info_file: ${{ steps.artifacts.outputs.path }}
+        bot_token: ${{ secrets.TELEGRAM_BOT_TOKEN }}
+        chat_id: ${{ secrets.TELEGRAM_CHAT_ID }}
+
+    - name: Notify Build Failed (other)
+      if: failure() && inputs.telegram_notify && steps.compile.outcome != 'failure'
+      uses: ./.github/actions/telegram-notify
+      with:
+        event: failure
+        # Deliberately no `stage:` here. The previous version hardcoded stage 6
+        # "Post-compile verification" for *every* non-compile failure, so a
+        # patch that failed to apply - hours earlier in the job - was reported
+        # to the channel as a post-compile problem. With no stage supplied the
+        # agent attributes the failure to the furthest stage it actually
+        # reached, which is accurate for both pre- and post-compile failures.
+        error_summary: 'The build failed outside the compile step (source setup, patching, toolchain, configuration, or artifact handling). See the run log for the failing step.'
+        build_name: ${{ steps.extract.outputs.file_name }}
+        kernel_version: ${{ inputs.kernel_version }}.${{ inputs.sublevel }}-${{ inputs.android_version }}-${{ inputs.os_patch_level }}
+        bot_token: ${{ secrets.TELEGRAM_BOT_TOKEN }}
+        chat_id: ${{ secrets.TELEGRAM_CHAT_ID }}
